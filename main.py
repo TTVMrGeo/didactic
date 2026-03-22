@@ -78,7 +78,7 @@ class local:
             self.socket.settimeout(5.0)
             response = self.socket.recv(1024).decode()
             return response
-        except socket.timeout:
+        except TimeoutError:  # Changed from socket.timeout
             return "Timeout waiting for response"
         except Exception as e:
             print(f"Send error: {e}")
@@ -143,7 +143,7 @@ class local:
                     if message.startswith("NOW_PLAYING"):
                         song_info = json.loads(message[12:])
                         self.message_queue.put(song_info)
-            except socket.timeout:
+            except TimeoutError:  # Changed from socket.timeout
                 continue
             except Exception as e:
                 print(f"Receive error: {e}")

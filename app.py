@@ -1,25 +1,109 @@
-import json, re, flet as ft
+import json, re, flet as ft, asyncio, requests
+from pathlib import Path
 from main import local, settings, settings_dir
 from pysubsonic import pySubsonic
 
 pysub = pySubsonic(
-    url="http://10.0.0.104:4533",
-    username="MrGeo",
-    password="ILoveCoco@13".encode(),
+    url=settings["server"]["url"],
+    username=settings["server"]["user"],
+    password=settings["server"]["password"].encode(),
     api="787b3fb9cc71200540ee8a71c92ca1b6".encode(),
     secret="af3f6d01bba4385b253356380db01b1e".encode(),
     lfm_user="kyaiiro",
     lfm_password="ILoveCoco@13".encode()
 )
 
+playlist_list = pysub.getPlaylists()["subsonic-response"]["playlists"]["playlist"]
+
 def main(page: ft.Page):
-    global playlist_list
     
     page.title = "Music App"
 
     profile = settings["active_profile"]
     client = local(settings["profiles"][profile]['ip'], settings["profiles"][profile]['port'])
 
+    def cache_image(song_id):
+        if not Path("img_cache/{song_id}.png").is_file():
+            response = requests.get(pysub.albumCover(song_id), stream=True)
+            # Check if the request was successful
+            if response.status_code == 200:
+                # Open a local file with the custom name and write the image content
+                with open(f"img_cache/{song_id}.png", 'wb') as f:
+                    f.write(response.content)
+                return f"img_cache/{song_id}.png"
+            else:
+                print("Failed to download image")
+                return "assets/NoCover.jpg"
+        else:
+            return f"img_cache/{song_id}.png"
+    
+    # --- Function to fetch song details from Subsonic ---
+    def get_song_details(song_id):
+        """Fetch song details from Subsonic using pysubsonic"""
+        try:
+            # Try to get song details using pysubsonic
+            # Assuming pysubsonic has a getSong method
+            song = pysub.getSong(song_id)
+            cover = cache_image(song_id)
+            song["cover"] = cover
+            return song
+        except Exception as e:
+            print(f"Error fetching song details: {e}")
+    
+    # --- Function to update the UI when a song starts ---
+    def update_now_playing(song_id):
+        """Update the UI with the currently playing song"""
+        print(f"Now playing song ID: {song_id}")
+        
+        # Fetch song details from Subsonic
+        song_details = get_song_details(song_id)
+        
+        # Update the right sidebar
+        right_sidebar.content = ft.Container(
+            content=ft.Column([
+                ft.Image(
+                    src=song_details["cover"],
+                    width=250,
+                    height=250,
+                    error_content=ft.Icon(ft.Icons.MUSIC_NOTE, size=50)
+                ),
+                ft.Text(value=song_details["title"], size=30, weight=ft.FontWeight.BOLD),
+                ft.Text(value=song_details["artist"], size=15),
+            ]),
+            width=250,
+            padding=10,
+        )
+        
+        # Update the output text
+        output.value = f"Now playing: {song_details.get('title', 'Unknown')}"
+        
+        # Update the page
+        page.update()
+    
+    # --- Set up callback for when a song starts ---
+    def on_song_start(song_info):
+        print(f"on_song_start called with: {song_info}")  # Debug print
+        song_id = song_info.get('song_id') or song_info.get('id')
+        if song_id:
+            print(f"Got song_id: {song_id}")  # Debug print
+            update_now_playing(song_id)
+        else:
+            print("No song_id found in message")  # Debug print
+    
+    # Set the callback on the client
+    client.set_callback(on_song_start)
+    print("Callback set on client")
+    
+    # --- Process messages from the server ---
+    async def process_messages():
+        """Process messages from the server's message queue"""
+        while True:
+            client.process_messages()
+            await asyncio.sleep(0.3)
+    
+    # Start the message processing task
+    page.run_task(process_messages)
+    
     # --- Output text ---
     output = ft.Text(value="Welcome to Music App", size=16)
 
@@ -56,7 +140,6 @@ def main(page: ft.Page):
             with open(f"{settings_dir}/settings.json", 'w') as f:
                 json.dump(settings, f, indent=4)
             output.value = f"Logged in as {username_field.value}"
-            playlist_list = pysub.getPlaylists()["subsonic-response"]["playlists"]["playlist"]
             page.pop_dialog()
         else:
             login_error.value = result if result else "Login failed"
@@ -92,15 +175,18 @@ def main(page: ft.Page):
 
     def play_song(song, title, artist):
         client.playSong(song)
+        # Show temporary loading state while waiting for server response
         right_sidebar.content = ft.Container(
             content=ft.Column([
                 ft.Image(src="assets/NoCover.jpg", width=250, height=250),
                 ft.Text(value=title, size=30),
                 ft.Text(value=artist, size=15),
+                ft.ProgressRing(width=20, height=20),
             ]),
             width=250,
-            padding=0,
+            padding=10,
         )
+        page.update()
 
     def play_playlist(playlist):
         client.playPlaylist(playlist)

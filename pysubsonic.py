@@ -29,6 +29,21 @@ class pySubsonic():
         response = requests.get(f"{self.url}/rest/getPlaylists.view", params=params)
         return response.json()
     
+    def getSong(self, id):
+        gen = self._gen_salt(self.password)
+        params = {
+            'u': self.username,
+            't': gen["token"],
+            's': gen["salt"],
+            'v': '1.16.1',
+            'c': "MyApp",
+            'f': "json",
+            'id': id
+        }
+
+        response = requests.get(f"{self.url}/rest/getSong.view", params=params)
+        return response.json()["subsonic-response"]["song"]
+
     def getSongsInPlaylist(self, playlist):
         gen = self._gen_salt(self.password)
         params = {
