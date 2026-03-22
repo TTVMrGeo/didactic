@@ -278,6 +278,9 @@ class AsyncLocalServer:
         self.queue_lock = asyncio.Lock()
         self.skip_current = False
 
+        # Handle clients
+        self.clients = {}
+
     async def start(self):
         """Start the async server"""
         try:
@@ -352,6 +355,28 @@ class AsyncLocalServer:
                 logger.error(f"Queue processor error: {e}")
                 await asyncio.sleep(1)
 
+    # In server.py, add this method to broadcast just the song ID
+    async def broadcast_now_playing(self, song_id):
+        """Send NOW_PLAYING message with just the song ID to all connected clients"""
+        message = f"NOW_PLAYING:{json.dumps({'song_id': song_id})}"
+        logger.info(f"[SERVER] Broadcasting: {message}")
+        
+        # Send to all connected clients
+        disconnected = []
+        for task, writer in list(self.clients.items()):
+            try:
+                writer.write(message.encode())
+                await writer.drain()
+                logger.info(f"[SERVER] Sent to client: {task}")
+            except Exception as e:
+                logger.error(f"Error broadcasting to client: {e}")
+                disconnected.append(task)
+        
+        # Clean up disconnected clients
+        for task in disconnected:
+            self.clients.pop(task, None)
+            self.active_tasks.discard(task)
+
     async def _play_song(self, song_id):
         """Internal method to play a single song"""
         try:
@@ -360,10 +385,56 @@ class AsyncLocalServer:
             
             # Stream and play the song
             success = await self.stream_and_play(song_id)
+            
+            if success:
+                # Broadcast just the song ID to all clients
+                await self.broadcast_now_playing(song_id)
+            
             return success
         except Exception as e:
             logger.error(f"Error playing song {song_id}: {e}")
             return False
+
+    async def get_song_details(self, song_id):
+        """Get song details from Subsonic"""
+        try:
+            gen = await self._gen_salt(self.subsonic_password)
+            
+            params = {
+                'u': self.subsonic_username,
+                't': gen["token"],
+                's': gen["salt"],
+                'c': 'MyApp',
+                'v': '1.16.1',
+                'f': 'json',
+                'id': song_id
+            }
+            
+            url = f"{self.subsonic_url}/rest/getSong.view"
+            response = await asyncio.to_thread(requests.get, url, params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                song = data.get('subsonic-response', {}).get('song', {})
+                return {
+                    'song_id': song_id,
+                    'title': song.get('title', 'Unknown'),
+                    'artist': song.get('artist', 'Unknown'),
+                    'album': song.get('album', 'Unknown'),
+                    'cover_art': f"{self.subsonic_url}/rest/getCoverArt.view?id={song.get('coverArt')}" if song.get('coverArt') else 'assets/NoCover.jpg',
+                    'duration': song.get('duration', 0)
+                }
+        except Exception as e:
+            logger.error(f"Error getting song details: {e}")
+        
+        return {
+            'song_id': song_id,
+            'title': 'Unknown',
+            'artist': 'Unknown',
+            'album': 'Unknown',
+            'cover_art': 'assets/NoCover.jpg',
+            'duration': 0
+        }
 
     async def handle_client(self, reader: StreamReader, writer: StreamWriter):
         """Handle client connection asynchronously"""
@@ -371,8 +442,14 @@ class AsyncLocalServer:
         logger.info(f"[SERVER] Client connected from {addr}")
         
         task = asyncio.create_task(self._handle_client_connection(reader, writer, addr))
+        
+        # Store the writer with the task
+        task.writer = writer
         self.active_tasks.add(task)
-        task.add_done_callback(self.active_tasks.discard)
+        self.clients[task] = writer  # Store for broadcasting
+        
+        task.add_done_callback(lambda t: self.active_tasks.discard(t))
+        task.add_done_callback(lambda t: self.clients.pop(t, None))
         
         try:
             await task

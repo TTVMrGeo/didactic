@@ -1,0 +1,4 @@
+#!/usr/bin/bash
+cd /home/mrgeo/Documents/Code/Music\ App/Server
+source env/bin/activate
+python server.py -i 0.0.0.0 -p 6969
