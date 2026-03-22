@@ -1,0 +1,15 @@
+{
+    "active_profile": "pc",
+    "profiles": {
+        "pc": {
+            "ip": "0.0.0.0",
+            "port": 6969
+        }
+    },
+    "server": {
+        "url": "http://10.0.0.104:4533",
+        "user": "MrGeo",
+        "password": "ILoveCoco@13",
+        "remember_me": true
+    }
+}
