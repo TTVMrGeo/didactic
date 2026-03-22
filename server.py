@@ -1,0 +1,751 @@
+#!/usr/bin/python
+import optparse, uuid, hashlib, requests, tempfile, os, asyncio, json, logging, mpv, random, time
+from asyncio import StreamReader, StreamWriter
+from collections import deque
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class MPVPlayer:
+    def __init__(self):
+        """Initialize MPV player"""
+        self.player = None
+        self.current_file = None
+        self.is_playing = False
+        self.is_loaded = False
+        self.playback_task = None
+        self._init_player()
+        
+    def _init_player(self):
+        """Initialize MPV with proper settings"""
+        try:
+            self.player = mpv.MPV(
+                input_default_bindings=True,
+                input_vo_keyboard=True,
+                osc=True,
+                keep_open='always',  # Keep player open
+                cache=True,
+                cache_secs=5,
+                volume=50,
+                really_quiet=True,
+                audio_device='auto',
+                audio_exclusive=False,
+                vo='null',  # No video output for audio-only
+                idle=True,  # Start in idle mode
+                ytdl=False
+            )
+            
+            # Set up event handlers
+            @self.player.property_observer('pause')
+            def pause_observer(name, value):
+                if value is not None:
+                    self.is_playing = not value
+                    logger.debug(f"Playback state: {'playing' if self.is_playing else 'paused'}")
+            
+            @self.player.event_callback('end-file')
+            def end_file_callback(event):
+                # Fixed: Access event properties correctly
+                reason = event.reason if hasattr(event, 'reason') else 0
+                logger.debug(f"Playback ended, reason: {reason}")
+                self.is_playing = False
+                self.is_loaded = False
+                
+            @self.player.event_callback('file-loaded')
+            def file_loaded_callback(event):
+                logger.debug("File loaded successfully")
+                self.is_loaded = True
+                
+            logger.info("MPV player initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize MPV: {e}")
+            raise
+    
+    async def ensure_player(self):
+        """Ensure player is initialized"""
+        if self.player is None:
+            await asyncio.to_thread(self._init_player)
+    
+    async def load(self, filename):
+        """Load a file into MPV"""
+        try:
+            await self.ensure_player()
+            
+            if not os.path.exists(filename):
+                logger.error(f"File not found: {filename}")
+                return False
+                
+            logger.info(f"Loading file: {filename}")
+            
+            # Stop current playback first
+            await self.stop()
+            
+            # Load new file
+            await asyncio.to_thread(self.player.command, 'loadfile', filename)
+            self.current_file = filename
+            
+            # Wait for file to load
+            await asyncio.sleep(0.5)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load file: {e}")
+            return False
+    
+    async def play(self):
+        """Start/resume playback"""
+        try:
+            await self.ensure_player()
+            
+            if not self.is_loaded and self.current_file:
+                # Reload file if needed
+                await self.load(self.current_file)
+                
+            await asyncio.to_thread(self.player.command, 'set', 'pause', 'no')
+            self.is_playing = True
+            logger.debug("Playback started")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to play: {e}")
+            return False
+    
+    async def pause(self):
+        """Pause playback"""
+        try:
+            await self.ensure_player()
+            await asyncio.to_thread(self.player.command, 'set', 'pause', 'yes')
+            self.is_playing = False
+            logger.debug("Playback paused")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to pause: {e}")
+            return False
+    
+    async def toggle_pause(self):
+        """Toggle pause state - fixed to not skip songs"""
+        try:
+            await self.ensure_player()
+            
+            # Only toggle if we have a loaded file
+            if self.is_loaded:
+                await asyncio.to_thread(self.player.command, 'cycle', 'pause')
+                return True
+            elif self.current_file:
+                # If no file is loaded but we have a current file, start playback
+                await self.play()
+                return True
+            else:
+                logger.debug("Cannot toggle pause: no file loaded")
+                return False
+            
+        except Exception as e:
+            logger.error(f"Toggle pause error: {e}")
+            return False
+    
+    async def stop(self):
+        """Stop playback"""
+        try:
+            await self.ensure_player()
+            await asyncio.to_thread(self.player.command, 'stop')
+            self.is_playing = False
+            logger.debug("Playback stopped")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to stop: {e}")
+            return False
+    
+    async def set_volume(self, volume):
+        """Set volume (0-100)"""
+        try:
+            await self.ensure_player()
+            volume = max(0, min(100, volume))
+            await asyncio.to_thread(self.player.command, 'set', 'volume', str(volume))
+            logger.debug(f"Volume set to {volume}")
+            return volume
+        except Exception as e:
+            logger.error(f"Failed to set volume: {e}")
+            return 50
+    
+    async def get_status(self):
+        """Get current playback status"""
+        try:
+            await self.ensure_player()
+            
+            # Get properties with error handling
+            status = {
+                'playing': self.is_playing,
+                'loaded': self.is_loaded,
+                'file': os.path.basename(self.current_file) if self.current_file else None
+            }
+            
+            # Try to get position if file is loaded
+            if self.is_loaded:
+                try:
+                    position = await asyncio.to_thread(self.player.command, 'get', 'time-pos')
+                    if position and position != 'null':
+                        status['position'] = float(position)
+                    else:
+                        status['position'] = 0.0
+                except:
+                    status['position'] = 0.0
+                
+                # Try to get duration
+                try:
+                    duration = await asyncio.to_thread(self.player.command, 'get', 'duration')
+                    if duration and duration != 'null':
+                        status['duration'] = float(duration)
+                    else:
+                        status['duration'] = 0.0
+                except:
+                    status['duration'] = 0.0
+                
+                # Try to get pause state
+                try:
+                    paused = await asyncio.to_thread(self.player.command, 'get', 'pause')
+                    status['paused'] = paused == 'yes'
+                except:
+                    status['paused'] = not self.is_playing
+            
+            # Get volume
+            try:
+                volume = await asyncio.to_thread(self.player.command, 'get', 'volume')
+                status['volume'] = int(volume) if volume else 50
+            except:
+                status['volume'] = 50
+            
+            return status
+            
+        except Exception as e:
+            logger.error(f"Failed to get status: {e}")
+            return {'error': str(e), 'playing': False, 'loaded': False}
+    
+    async def seek(self, seconds):
+        """Seek to position in seconds"""
+        try:
+            await self.ensure_player()
+            if self.is_loaded:
+                await asyncio.to_thread(self.player.command, 'seek', str(seconds), 'absolute')
+                logger.debug(f"Seeked to {seconds}s")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to seek: {e}")
+            return False
+    
+    async def wait_for_playback(self):
+        """Wait for playback to complete"""
+        while self.is_playing and self.is_loaded:
+            await asyncio.sleep(1)
+    
+    def cleanup(self):
+        """Clean up MPV resources"""
+        try:
+            if self.player:
+                logger.debug("Terminating MPV player")
+                self.player.terminate()
+                self.player = None
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+class AsyncLocalServer:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.subsonic_password = "ILoveCoco@13"
+        self.subsonic_username = "MrGeo"
+        self.subsonic_url = "http://10.0.0.104:4533"
+
+        self.current_playlist = None
+        self.current_track = None
+        
+        # MPV Player
+        self.player = MPVPlayer()
+        
+        # Server attributes
+        self.server = None
+        self.active_tasks = set()
+        self.shutdown_flag = False
+        
+        # Queue management
+        self.song_queue = deque()  # Use deque for efficient queue operations
+        self.queue_history = deque(maxlen=50)  # Keep history of last 50 played songs
+        self.currently_playing = None
+        self.queue_task = None
+        self.queue_lock = asyncio.Lock()
+        self.skip_current = False
+
+    async def start(self):
+        """Start the async server"""
+        try:
+            self.server = await asyncio.start_server(
+                self.handle_client,
+                self.host,
+                self.port,
+                backlog=128
+            )
+            
+            addr = self.server.sockets[0].getsockname()
+            logger.info(f"[SERVER] Listening on {addr[0]}:{addr[1]}")
+            
+            # Start queue processor
+            self.queue_task = asyncio.create_task(self.process_queue())
+            
+            async with self.server:
+                await self.server.serve_forever()
+                
+        except asyncio.CancelledError:
+            logger.info("[SERVER] Server cancelled")
+        except Exception as e:
+            logger.error(f"[SERVER] Error: {e}")
+        finally:
+            await self.cleanup()
+
+    async def process_queue(self):
+        """Process the queue sequentially"""
+        while not self.shutdown_flag:
+            try:
+                async with self.queue_lock:
+                    if self.song_queue and not self.currently_playing:
+                        # Get next song from queue
+                        next_song = self.song_queue.popleft()
+                        self.currently_playing = next_song
+                        
+                        logger.info(f"Processing next song in queue: {next_song}")
+                        
+                        # Play the song
+                        await self._play_song(next_song)
+                        
+                        # Check if we should skip adding to history (for rewind/back functionality)
+                        if not hasattr(self, '_skip_history') or not self._skip_history:
+                            # Move to history
+                            self.queue_history.append({
+                                'song': next_song,
+                                'played_at': time.time(),
+                                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                            })
+                        else:
+                            # Clear the skip flag
+                            self._skip_history = False
+                        
+                        # Wait for playback to complete with interrupt capability
+                        self._current_playback_task = asyncio.current_task()
+                        try:
+                            # Use a while loop that checks for skip flag
+                            while self.currently_playing and not self.skip_current:
+                                if not self.player.is_playing and not self.player.is_loaded:
+                                    break
+                                await asyncio.sleep(0.5)
+                        finally:
+                            self._current_playback_task = None
+                            self.skip_current = False
+                        
+                        self.currently_playing = None
+                        
+                    # Small delay to prevent busy waiting
+                    await asyncio.sleep(0.1)
+                    
+            except Exception as e:
+                logger.error(f"Queue processor error: {e}")
+                await asyncio.sleep(1)
+
+    async def _play_song(self, song_id):
+        """Internal method to play a single song"""
+        try:
+            # Stop current playback if any
+            await self.player.stop()
+            
+            # Stream and play the song
+            success = await self.stream_and_play(song_id)
+            return success
+        except Exception as e:
+            logger.error(f"Error playing song {song_id}: {e}")
+            return False
+
+    async def handle_client(self, reader: StreamReader, writer: StreamWriter):
+        """Handle client connection asynchronously"""
+        addr = writer.get_extra_info('peername')
+        logger.info(f"[SERVER] Client connected from {addr}")
+        
+        task = asyncio.create_task(self._handle_client_connection(reader, writer, addr))
+        self.active_tasks.add(task)
+        task.add_done_callback(self.active_tasks.discard)
+        
+        try:
+            await task
+        except asyncio.CancelledError:
+            logger.info(f"[SERVER] Client task cancelled for {addr}")
+        finally:
+            logger.info(f"[SERVER] Client disconnected from {addr}")
+    
+    async def _handle_client_connection(self, reader: StreamReader, writer: StreamWriter, addr):
+        """Internal method to handle client connection"""
+        try:
+            while not self.shutdown_flag:
+                try:
+                    data = await asyncio.wait_for(reader.read(1024), timeout=60.0)
+                    
+                    if not data:
+                        break
+                    
+                    message = data.decode().strip()
+                    logger.info(f"[SERVER] Received from {addr}: {message}")
+                    
+                    response = await self.process_command(message)
+                    
+                    writer.write(response.encode())
+                    await writer.drain()
+                    
+                except asyncio.TimeoutError:
+                    # Send heartbeat to keep connection alive
+                    try:
+                        writer.write(b"PING")
+                        await writer.drain()
+                    except:
+                        break
+                    continue
+                except ConnectionResetError:
+                    logger.info(f"[SERVER] Connection reset by {addr}")
+                    break
+                except Exception as e:
+                    logger.error(f"[SERVER] Error handling client {addr}: {e}")
+                    break
+                    
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    
+    async def process_command(self, command: str) -> str:
+        """Process incoming commands asynchronously"""
+        command = command.strip()
+        
+        if command.startswith("shuffle "):
+            playlist = command[8:]
+            playlist = playlist.replace("'", "").replace("[", "").replace("]", "").replace(",", "").split(" ")
+            return await self.shuffle(playlist)
+
+        elif command.startswith("playlist "):
+            playlist = command[9:]
+            playlist = playlist.replace("'", "").replace("[", "").replace("]", "").replace(",", "").split(" ")
+            return await self.queue(playlist)
+            
+        elif command.startswith("play "):
+            item = command[5:]
+            return await self.play(item)
+            
+        elif command == "skip":
+            return await self.skip()
+            
+        elif command == "rewind":
+            return await self.rewind()
+            
+        elif command == "toggle_pause":
+            return await self.toggle_pause()
+            
+        elif command.startswith("volume "):
+            try:
+                volume = int(command[7:])
+                return await self.set_volume(volume)
+            except:
+                return "Invalid volume value"
+            
+        elif command == "status":
+            return await self.get_status()
+            
+        elif command == "queue":
+            return await self.show_queue()
+            
+        elif command == "history":
+            return await self.show_history()
+            
+        elif command == "clear_queue":
+            return await self.clear_queue()
+            
+        else:
+            return f"{command} Unknown command"
+
+    async def shuffle(self, playlist):
+        """Handle shuffle command"""
+        shuffled = playlist.copy()
+        random.shuffle(shuffled)
+        await self.queue(shuffled)
+        return f"Shuffled and added {len(shuffled)} songs to queue"
+
+    async def queue(self, playlist):
+        """Add songs to queue"""
+        async with self.queue_lock:
+            added_count = 0
+            for item in playlist:
+                if item not in self.song_queue:  # Optional: prevent duplicates
+                    self.song_queue.append(item)
+                    added_count += 1
+        return f"Added {added_count} songs to queue. Queue size: {len(self.song_queue)}"
+    
+    async def play(self, item):
+        """Handle play command - adds to queue or plays immediately"""
+        if self.currently_playing or self.song_queue:
+            # If something is playing or queued, add to queue
+            async with self.queue_lock:
+                self.song_queue.append(item)
+            return f"Added '{item}' to queue. Position: {len(self.song_queue)}"
+        else:
+            # Nothing playing, play immediately
+            self.currently_playing = item
+            asyncio.create_task(self._play_song(item))
+            return f"Playing: {item}"
+
+    async def show_queue(self):
+        """Show current queue"""
+        async with self.queue_lock:
+            if not self.song_queue:
+                return "Queue is empty"
+            
+            queue_list = list(self.song_queue)
+            result = f"Current queue ({len(queue_list)} songs):\n"
+            for i, song in enumerate(queue_list[:20], 1):  # Show first 20
+                result += f"{i}. {song}\n"
+            
+            if len(queue_list) > 20:
+                result += f"... and {len(queue_list) - 20} more"
+            
+            if self.currently_playing:
+                result += f"\nCurrently playing: {self.currently_playing}"
+            
+            return result
+    
+    async def show_history(self):
+        """Show playback history"""
+        if not self.queue_history:
+            return "No playback history"
+        
+        result = f"Playback history (last {len(self.queue_history)} songs):\n"
+        for i, entry in enumerate(reversed(list(self.queue_history)), 1):
+            result += f"{i}. {entry['song']} (played at {entry['timestamp']})\n"
+        
+        return result
+    
+    async def clear_queue(self):
+        """Clear the queue"""
+        async with self.queue_lock:
+            cleared_count = len(self.song_queue)
+            self.song_queue.clear()
+        return f"Cleared {cleared_count} songs from queue"
+    
+    async def skip(self):
+        """Skip current track"""
+        # Signal to skip adding to history (if needed)
+        self._skip_history = True
+        self.skip_current = True
+        await self.player.stop()
+        return "Skipped current track"
+
+    async def rewind(self):
+        """Rewind current track - goes to previous song if within first 10 seconds"""
+        try:
+            status = await self.player.get_status()
+            current_pos = status.get('position', 0)
+            
+            # If within first 10 seconds, go to previous song
+            if current_pos <= 10 and self.queue_history:
+                # Get the previous song from history
+                previous_song = self.queue_history[-1]['song']
+                logger.info(f"Rewind: within first 10 seconds, playing previous song: {previous_song}")
+                
+                # Signal to skip adding this to history when playback ends
+                self._skip_history = True
+                
+                # Set skip flag to interrupt waiting
+                self.skip_current = True
+                
+                # Stop the current playback
+                await self.player.stop()
+                
+                # Wait a moment for the stop to complete
+                await asyncio.sleep(0.1)
+                
+                # Clear currently_playing to allow queue processor to pick up the previous song
+                async with self.queue_lock:
+                    # Instead of playing directly, add previous song to front of queue
+                    self.song_queue.appendleft(previous_song)
+                    self.currently_playing = None
+                
+                return f"Rewound to previous song: {previous_song}"
+            else:
+                # Otherwise, rewind within current song
+                new_pos = max(0, current_pos - 10)
+                await self.player.seek(new_pos)
+                return f"Rewound to {new_pos:.1f} seconds"
+                
+        except Exception as e:
+            logger.error(f"Rewind error: {e}", exc_info=True)
+            return f"Rewind error: {e}"
+    
+    async def set_volume(self, volume):
+        """Set volume"""
+        new_volume = await self.player.set_volume(volume)
+        return f"Volume set to {new_volume}%"
+
+    async def get_status(self):
+        """Get current playback status"""
+        status = await self.player.get_status()
+        
+        # Add queue information to status
+        async with self.queue_lock:
+            status['queue_size'] = len(self.song_queue)
+            status['currently_playing'] = self.currently_playing
+        
+        return json.dumps(status, indent=2)
+
+    async def toggle_pause(self):
+        """Toggle pause state - fixed to not skip songs"""
+        try:
+            success = await self.player.toggle_pause()
+            if success:
+                status = await self.player.get_status()
+                # Check if we have a file loaded before checking paused state
+                if status.get('loaded', False):
+                    if status.get('paused', False):
+                        return "Playback paused"
+                    else:
+                        return "Playback resumed"
+                else:
+                    # This happens when we just started playing a new song
+                    return "Playback started"
+            else:
+                return "No song loaded to pause/resume"
+        except Exception as e:
+            logger.error(f"Toggle pause error: {e}")
+            return f"Error: {str(e)}"
+    
+    async def _gen_salt(self, password):
+        """Generate salt and token for Subsonic authentication"""
+        salt = uuid.uuid4().hex
+        token = hashlib.md5((password + salt).encode()).hexdigest()
+        return {"salt": salt, "token": token}
+
+    async def stream_and_play(self, song_id):
+        """Stream audio from Subsonic and play it"""
+        gen = await self._gen_salt(self.subsonic_password)
+
+        params = {
+            'u': self.subsonic_username,
+            't': gen["token"],
+            's': gen["salt"],
+            'c': 'MyApp',
+            'v': '1.16.1',
+            'f': 'json',
+            'id': song_id
+        }
+
+        url = f"{self.subsonic_url}/rest/stream.view"
+        
+        try:
+            response = await asyncio.to_thread(
+                requests.get, url, params=params, stream=True
+            )
+            
+            if response.status_code == 200:
+                # Create temp file
+                temp_file = await asyncio.to_thread(
+                    tempfile.NamedTemporaryFile, mode='wb', suffix='.mp3', delete=False
+                )
+                temp_filename = temp_file.name
+                
+                try:
+                    # Download file
+                    chunk_size = 1024 * 100
+                    for chunk in response.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            await asyncio.to_thread(temp_file.write, chunk)
+                            await asyncio.to_thread(temp_file.flush)
+                    
+                    logger.info(f"Download finished: {temp_filename}")
+                    
+                    # Load and play with MPV
+                    success = await self.player.load(temp_filename)
+                    if success:
+                        await self.player.play()
+                        return True
+                    else:
+                        logger.error("Failed to load file into MPV")
+                        return False
+                    
+                finally:
+                    # Clean up temp file after playback
+                    if os.path.exists(temp_filename):
+                        await asyncio.to_thread(os.remove, temp_filename)
+                        logger.info(f"Cleaned up: {temp_filename}")
+                        
+            else:
+                logger.error(f"Error: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Streaming error: {e}", exc_info=True)
+            return False
+    
+    async def cleanup(self):
+        """Clean up server resources"""
+        logger.info("[SERVER] Cleaning up...")
+        
+        # Stop queue processor
+        self.shutdown_flag = True
+        if self.queue_task:
+            self.queue_task.cancel()
+            try:
+                await self.queue_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Cancel all client tasks
+        for task in self.active_tasks:
+            if not task.done():
+                task.cancel()
+        
+        if self.active_tasks:
+            await asyncio.wait(self.active_tasks, timeout=5.0)
+        
+        # Clean up MPV player
+        await asyncio.to_thread(self.player.cleanup)
+        
+        logger.info("[SERVER] Cleanup complete")
+
+def get_arguments():
+    """Parse command line arguments"""
+    parser = optparse.OptionParser()
+    
+    server = optparse.OptionGroup(parser, "Server Options", "Options for when starting a server")
+    server.add_option("-i", "--ip", dest="ip", help="Server IP")
+    server.add_option("-p", "--port", dest="port", help="Server Port")
+    
+    parser.add_option_group(server)
+    (options, arguments) = parser.parse_args()
+    
+    if not options.ip or not options.port:
+        return "Missing IP or Port (--ip and --port) use --help"
+    else:
+        return options
+
+async def main():
+    """Main entry point"""
+    options = get_arguments()
+    if isinstance(options, str):
+        print(options)
+        return
+    
+    server = AsyncLocalServer(options.ip, int(options.port))
+    
+    try:
+        await server.start()
+    except KeyboardInterrupt:
+        print("\n[SERVER] Keyboard interrupt received")
+        await server.cleanup()
+    except Exception as e:
+        logger.error(f"Server error: {e}")
+        await server.cleanup()
+
+if __name__ == "__main__":
+    asyncio.run(main())
