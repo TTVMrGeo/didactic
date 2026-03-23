@@ -3,24 +3,80 @@ from pathlib import Path
 from main import local, settings, settings_dir
 from pysubsonic import pySubsonic
 
-pysub = pySubsonic(
-    url=settings["server"]["url"],
-    username=settings["server"]["user"],
-    password=settings["server"]["password"].encode(),
-    api="787b3fb9cc71200540ee8a71c92ca1b6".encode(),
-    secret="af3f6d01bba4385b253356380db01b1e".encode(),
-    lfm_user="kyaiiro",
-    lfm_password="ILoveCoco@13".encode()
-)
-
-playlist_list = pysub.getPlaylists()["subsonic-response"]["playlists"]["playlist"]
-
 def main(page: ft.Page):
     
     page.title = "Music App"
 
+    # --- Login dialog ---
+    serverip_field = ft.TextField(label="Server IP", value=settings['server'].get('url', ''))
+    username_field = ft.TextField(label="Username", value=settings['server'].get('user', ''))
+    password_field = ft.TextField(label="Password", password=True, can_reveal_password=True)
+    remember_me = ft.Checkbox(label="Remember me", value=settings['server'].get('remember_me', False))
+    login_error = ft.Text(value="", color=ft.Colors.RED)
+    
+    def do_login(e):
+        url = serverip_field.value
+        url = "{}{}{}".format(
+                "http://" if "http" not in url else "",
+                url,
+                ":4533" if not re.search(r':\d+', url) else ""
+                )
+        if not url:
+            login_error.value = "No server URL configured in settings.json"
+            page.update()
+            return
+
+        result = client.server_status(url, username_field.value, password_field.value)
+        if result == url:
+            url = serverip_field.value
+            settings["server"]["url"] = "{}{}{}".format(
+                "http://" if "http" not in url else "",
+                url,
+                ":4533" if not re.search(r':\d+', url) else ""
+                )
+            settings['server']['user'] = username_field.value
+            settings['server']['password'] = password_field.value
+            settings['server']['remember_me'] = remember_me.value
+            with open(f"{settings_dir}/settings.json", 'w') as f:
+                json.dump(settings, f, indent=4)
+            page.pop_dialog()
+        else:
+            login_error.value = result if result else "Login failed"
+
+        page.update()
+
+    login_dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Login"),
+        content=ft.Column(
+            controls=[serverip_field, username_field, password_field, remember_me, login_error],
+            tight=True,
+        ),
+        actions=[
+            ft.FilledButton(content="Login", on_click=do_login),
+        ],
+    )
+
+    # --- Show login dialog on startup if not remembered ---
+    if not settings['server'].get('remember_me', False):
+        page.show_dialog(login_dialog)
+    else:
+        page.update()
+
     profile = settings["active_profile"]
     client = local(settings["profiles"][profile]['ip'], settings["profiles"][profile]['port'])
+
+    pysub = pySubsonic(
+        url=settings["server"]["url"],
+        username=settings["server"]["user"],
+        password=settings["server"]["password"].encode(),
+        api="787b3fb9cc71200540ee8a71c92ca1b6".encode(),
+        secret="af3f6d01bba4385b253356380db01b1e".encode(),
+        lfm_user="kyaiiro",
+        lfm_password="ILoveCoco@13".encode()
+    )
+
+    playlist_list = pysub.getPlaylists()["subsonic-response"]["playlists"]["playlist"]
 
     def cache_image(song_id):
         if not Path("img_cache/{song_id}.png").is_file():
@@ -106,45 +162,6 @@ def main(page: ft.Page):
     
     # --- Output text ---
     output = ft.Text(value="Welcome to Music App", size=16)
-
-    # --- Login dialog ---
-    serverip_field = ft.TextField(label="Server IP", value=settings['server'].get('url', ''))
-    username_field = ft.TextField(label="Username", value=settings['server'].get('user', ''))
-    password_field = ft.TextField(label="Password", password=True, can_reveal_password=True)
-    remember_me = ft.Checkbox(label="Remember me", value=settings['server'].get('remember_me', False))
-    login_error = ft.Text(value="", color=ft.Colors.RED)
-    
-    def do_login(e):
-        url = serverip_field.value
-        url = "{}{}{}".format(
-                "http://" if "http" not in url else "",
-                url,
-                ":4533" if not re.search(r':\d+', url) else ""
-                )
-        if not url:
-            login_error.value = "No server URL configured in settings.json"
-            page.update()
-            return
-
-        result = client.server_status(url, username_field.value, password_field.value)
-        if result == url:
-            url = serverip_field.value
-            settings["server"]["url"] = "{}{}{}".format(
-                "http://" if "http" not in url else "",
-                url,
-                ":4533" if not re.search(r':\d+', url) else ""
-                )
-            settings['server']['user'] = username_field.value
-            settings['server']['password'] = password_field.value
-            settings['server']['remember_me'] = remember_me.value
-            with open(f"{settings_dir}/settings.json", 'w') as f:
-                json.dump(settings, f, indent=4)
-            output.value = f"Logged in as {username_field.value}"
-            page.pop_dialog()
-        else:
-            login_error.value = result if result else "Login failed"
-
-        page.update()
 
     def update_settings():
         # Update the new settings
@@ -291,17 +308,6 @@ def main(page: ft.Page):
     settings_profiles = ft.TextField(label="Profile", value=settings['profiles'][settings['active_profile']].get('ip', ''))
 
     # -- Popups --
-    login_dialog = ft.AlertDialog(
-        modal=True,
-        title=ft.Text("Login"),
-        content=ft.Column(
-            controls=[serverip_field, username_field, password_field, remember_me, login_error],
-            tight=True,
-        ),
-        actions=[
-            ft.FilledButton(content="Login", on_click=do_login),
-        ],
-    )
     settings_dialogue = ft.AlertDialog(
         modal=True,
         title=ft.Text("Settings"),
@@ -365,13 +371,6 @@ def main(page: ft.Page):
     page.add(
         ft.Row([left_sidebar, main_content, right_sidebar], expand=True)
     )
-
-    # --- Show login dialog on startup if not remembered ---
-    if not settings['server'].get('remember_me', False):
-        page.show_dialog(login_dialog)
-    else:
-        output.value = f"Logged in as {settings['server'].get('user', '')}"
-        page.update()
 
 
 ft.run(main)
