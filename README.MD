@@ -42,6 +42,8 @@ NoDisplay=false
 
 ## Todo list:
 ```
+#TODO Add profiles for different local servers (eg, 0.0.0.0 and 10.0.0.103)
+#FIXME Fetch song info when a client connects mid song
 #FIXME Fix a different song playing when skipping a song and then going back
 #FIXME Play single songs
 #TODO Make pressing on a song play it immediately and move the queue back a bit
@@ -49,4 +51,5 @@ NoDisplay=false
 #TODO Song progress bar
 #TODO Song volume controlls
 #TODO Play specific song with searching
+#FIXME Add/Replace comments with some actual ones XD
 ```
