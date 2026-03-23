@@ -258,9 +258,6 @@ class AsyncLocalServer:
         self.subsonic_password = "ILoveCoco@13"
         self.subsonic_username = "MrGeo"
         self.subsonic_url = "http://10.0.0.104:4533"
-
-        self.current_playlist = None
-        self.current_track = None
         
         # MPV Player
         self.player = MPVPlayer()
@@ -272,7 +269,7 @@ class AsyncLocalServer:
         
         # Queue management
         self.song_queue = deque()  # Use deque for efficient queue operations
-        self.queue_history = deque(maxlen=50)  # Keep history of last 50 played songs
+        self.queue_history = deque()  # Keep history of last 50 played songs
         self.currently_playing = None
         self.queue_task = None
         self.queue_lock = asyncio.Lock()
@@ -507,7 +504,7 @@ class AsyncLocalServer:
         elif command.startswith("playlist "):
             playlist = command[9:]
             playlist = playlist.replace("'", "").replace("[", "").replace("]", "").replace(",", "").split(" ")
-            return await self.queue(playlist)
+            return await self.queue(playlist, "Playlist")
             
         elif command.startswith("play "):
             item = command[5:]
@@ -545,29 +542,33 @@ class AsyncLocalServer:
             return f"{command} Unknown command"
 
     async def shuffle(self, playlist):
-        """Handle shuffle command"""
         shuffled = playlist.copy()
         random.shuffle(shuffled)
-        await self.queue(shuffled)
+        await self.queue(shuffled, "Playlist")
         return f"Shuffled and added {len(shuffled)} songs to queue"
 
-    async def queue(self, playlist):
-        """Add songs to queue"""
-        async with self.queue_lock:
-            added_count = 0
-            for item in playlist:
-                if item not in self.song_queue:  # Optional: prevent duplicates
-                    self.song_queue.append(item)
-                    added_count += 1
-        return f"Added {added_count} songs to queue. Queue size: {len(self.song_queue)}"
+    async def queue(self, recieved_item, type):
+        #FIXME fix adding a single song to queue
+        if type == "Song":
+            async with self.queue_lock:
+                self.song_queue.appendleft(recieved_item)
+                
+        elif type == "Playlist":
+            await self.player.stop()
+            await self.clear_queue()
+            """Add songs to queue"""
+            async with self.queue_lock:
+                added_count = 0
+                for item in recieved_item:
+                    if item not in self.song_queue:  # Optional: prevent duplicates
+                        self.song_queue.append(item)
+                        added_count += 1
+            return f"Added {added_count} songs to queue. Queue size: {len(self.song_queue)}"
     
     async def play(self, item):
         """Handle play command - adds to queue or plays immediately"""
         if self.currently_playing or self.song_queue:
-            # If something is playing or queued, add to queue
-            async with self.queue_lock:
-                self.song_queue.append(item)
-            return f"Added '{item}' to queue. Position: {len(self.song_queue)}"
+            await self.queue(item, "Song")
         else:
             # Nothing playing, play immediately
             self.currently_playing = item
