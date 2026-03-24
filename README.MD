@@ -45,7 +45,6 @@ NoDisplay=false
 #TODO Add profiles for different local servers (eg, 0.0.0.0 and 10.0.0.103)
 #FIXME Fetch song info when a client connects mid song
 #FIXME Fix a different song playing when skipping a song and then going back
-#FIXME Play single songs
 #TODO Make pressing on a song play it immediately and move the queue back a bit
 #TODO Add to queue and play next buttons
 #TODO Song progress bar
