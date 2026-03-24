@@ -75,7 +75,7 @@ class local:
         
         try:
             self.socket.send(command.encode())
-            self.socket.settimeout(5.0)
+            self.socket.settimeout(10.0)
             response = self.socket.recv(1024).decode()
             return response
         except TimeoutError:  # Changed from socket.timeout

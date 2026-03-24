@@ -138,6 +138,7 @@ def main(page: ft.Page):
     
     # --- Set up callback for when a song starts ---
     def on_song_start(song_info):
+        print(f"LOOK HERE HERE MAY BE AN ISSEEEE UAGHJKASGFHBKASGHFKJASGHFKA {song_info}")
         print(f"on_song_start called with: {song_info}")  # Debug print
         song_id = song_info.get('song_id') or song_info.get('id')
         if song_id:
@@ -190,20 +191,8 @@ def main(page: ft.Page):
     def search(e):
         pass
 
-    def play_song(song, title, artist):
-        client.playSong(song)
-        # Show temporary loading state while waiting for server response
-        right_sidebar.content = ft.Container(
-            content=ft.Column([
-                ft.Image(src="assets/NoCover.jpg", width=250, height=250),
-                ft.Text(value=title, size=30),
-                ft.Text(value=artist, size=15),
-                ft.ProgressRing(width=20, height=20),
-            ]),
-            width=250,
-            padding=10,
-        )
-        page.update()
+    def play_song(song):
+        print(client.playSong(song))
 
     def play_playlist(playlist):
         client.playPlaylist(playlist)
@@ -275,7 +264,7 @@ def main(page: ft.Page):
         )
         
         for song in songs:
-            button = ft.TextButton(content=song['title'], icon=ft.Icons.PLAY_ARROW, on_click=lambda e, id=song['id'], title=song['title'], artist=song['artist']: play_song(id, title, artist))
+            button = ft.TextButton(content=song['title'], icon=ft.Icons.PLAY_ARROW, on_click=lambda e, id=song['id']: play_song(id))
             songs_container.content.controls.append(button)
         return main_column
 
