@@ -308,50 +308,53 @@ class AsyncLocalServer:
         """Process the queue sequentially"""
         while not self.shutdown_flag:
             try:
+                # Check if we need to play a song
                 async with self.queue_lock:
                     if self.song_queue and not self.currently_playing:
-                        # Get next song from queue
                         next_song = self.song_queue.popleft()
                         self.currently_playing = next_song
-                        
-                        logger.info(f"Processing next song in queue: {next_song}")
-                        
-                        # Play the song
-                        await self._play_song(next_song)
-                        
-                        # Check if we should skip adding to history (for rewind/back functionality)
-                        if not hasattr(self, '_skip_history') or not self._skip_history:
-                            # Move to history
-                            self.queue_history.append({
-                                'song': next_song,
-                                'played_at': time.time(),
-                                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-                            })
-                        else:
-                            # Clear the skip flag
-                            self._skip_history = False
-                        
-                        # Wait for playback to complete with interrupt capability
-                        self._current_playback_task = asyncio.current_task()
-                        try:
-                            # Use a while loop that checks for skip flag
-                            while self.currently_playing and not self.skip_current:
-                                if not self.player.is_playing and not self.player.is_loaded:
-                                    break
-                                await asyncio.sleep(0.5)
-                        finally:
-                            self._current_playback_task = None
-                            self.skip_current = False
-                        
-                        self.currently_playing = None
-                        
-                    # Small delay to prevent busy waiting
-                    await asyncio.sleep(0.1)
+                        should_play = True
+                    else:
+                        should_play = False
+                
+                # Play the song WITHOUT holding the lock
+                if should_play:
+                    logger.info(f"Processing next song in queue: {next_song}")
                     
+                    # Play the song
+                    await self._play_song(next_song)
+                    
+                    # Update history WITHOUT lock
+                    if not hasattr(self, '_skip_history') or not self._skip_history:
+                        self.queue_history.append({
+                            'song': next_song,
+                            'played_at': time.time(),
+                            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                    else:
+                        self._skip_history = False
+                    
+                    # Wait for playback to complete
+                    self._current_playback_task = asyncio.current_task()
+                    try:
+                        while self.currently_playing and not self.skip_current:
+                            if not self.player.is_playing and not self.player.is_loaded:
+                                break
+                            await asyncio.sleep(0.5)
+                    finally:
+                        self._current_playback_task = None
+                        self.skip_current = False
+                    
+                    # Clear currently_playing WITHOUT lock
+                    self.currently_playing = None
+                        
+                # Small delay to prevent busy waiting
+                await asyncio.sleep(0.1)
+                        
             except Exception as e:
                 logger.error(f"Queue processor error: {e}")
                 await asyncio.sleep(1)
-
+                
     # In server.py, add this method to broadcast just the song ID
     async def broadcast_now_playing(self, song_id):
         """Send NOW_PLAYING message with just the song ID to all connected clients"""
@@ -375,6 +378,8 @@ class AsyncLocalServer:
             self.active_tasks.discard(task)
 
     async def _play_song(self, song_id):
+        """Internal method to play a single song"""
+        logger.info(f"!!! _play_song called for {song_id}, currently_playing: {self.currently_playing}, song_queue size: {len(self.song_queue)}")
         """Internal method to play a single song"""
         try:
             # Stop current playback if any
@@ -504,11 +509,11 @@ class AsyncLocalServer:
         elif command.startswith("playlist "):
             playlist = command[9:]
             playlist = playlist.replace("'", "").replace("[", "").replace("]", "").replace(",", "").split(" ")
-            return await self.queue(playlist, "Playlist")
+            return await self.queue(playlist)
             
         elif command.startswith("play "):
             item = command[5:]
-            return await self.play(item)
+            return await self.play([item])
             
         elif command == "skip":
             return await self.skip()
@@ -544,31 +549,28 @@ class AsyncLocalServer:
     async def shuffle(self, playlist):
         shuffled = playlist.copy()
         random.shuffle(shuffled)
-        await self.queue(shuffled, "Playlist")
-        return f"Shuffled and added {len(shuffled)} songs to queue"
+        return await self.queue(shuffled)
 
-    async def queue(self, recieved_item, type):
-        #FIXME fix adding a single song to queue
-        if type == "Song":
-            async with self.queue_lock:
-                self.song_queue.appendleft(recieved_item)
-                
-        elif type == "Playlist":
+    async def queue(self, recieved_item):
+        """Add songs to queue"""
+        if len(recieved_item) > 1:
             await self.player.stop()
             await self.clear_queue()
-            """Add songs to queue"""
             async with self.queue_lock:
                 added_count = 0
                 for item in recieved_item:
-                    if item not in self.song_queue:  # Optional: prevent duplicates
-                        self.song_queue.append(item)
-                        added_count += 1
+                    self.song_queue.append(item)
+                    added_count += 1
             return f"Added {added_count} songs to queue. Queue size: {len(self.song_queue)}"
+        else:
+            async with self.queue_lock:
+                self.song_queue.appendleft(recieved_item[0])
+            return "Added song to queue"
     
     async def play(self, item):
         """Handle play command - adds to queue or plays immediately"""
         if self.currently_playing or self.song_queue:
-            await self.queue(item, "Song")
+            return await self.queue(item)
         else:
             # Nothing playing, play immediately
             self.currently_playing = item
@@ -614,9 +616,8 @@ class AsyncLocalServer:
     
     async def skip(self):
         """Skip current track"""
-        # Signal to skip adding to history (if needed)
         self._skip_history = True
-        self.skip_current = True
+        self.currently_playing = None
         await self.player.stop()
         return "Skipped current track"
 
@@ -634,10 +635,7 @@ class AsyncLocalServer:
                 
                 # Signal to skip adding this to history when playback ends
                 self._skip_history = True
-                
-                # Set skip flag to interrupt waiting
-                self.skip_current = True
-                
+    
                 # Stop the current playback
                 await self.player.stop()
                 
