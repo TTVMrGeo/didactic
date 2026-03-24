@@ -138,11 +138,9 @@ def main(page: ft.Page):
     
     # --- Set up callback for when a song starts ---
     def on_song_start(song_info):
-        print(f"LOOK HERE HERE MAY BE AN ISSEEEE UAGHJKASGFHBKASGHFKJASGHFKA {song_info}")
-        print(f"on_song_start called with: {song_info}")  # Debug print
+        print(song_info)
         song_id = song_info.get('song_id') or song_info.get('id')
         if song_id:
-            print(f"Got song_id: {song_id}")  # Debug print
             update_now_playing(song_id)
         else:
             print("No song_id found in message")  # Debug print
@@ -192,7 +190,7 @@ def main(page: ft.Page):
         pass
 
     def play_song(song):
-        print(client.playSong(song))
+        client.playSong(song)
 
     def play_playlist(playlist):
         client.playPlaylist(playlist)
