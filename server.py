@@ -268,12 +268,13 @@ class AsyncLocalServer:
         self.shutdown_flag = False
         
         # Queue management
-        self.song_queue = deque()  # Use deque for efficient queue operations
-        self.queue_history = deque()  # Keep history of last 50 played songs
+        self.song_queue = []
         self.currently_playing = None
+        self.current_index = 0
         self.queue_task = None
         self.queue_lock = asyncio.Lock()
         self.skip_current = False
+        self.rewound = False
 
         # Handle clients
         self.clients = {}
@@ -307,11 +308,18 @@ class AsyncLocalServer:
     async def process_queue(self):
         """Process the queue sequentially"""
         while not self.shutdown_flag:
+            print(self.song_queue)
             try:
                 # Check if we need to play a song
                 async with self.queue_lock:
                     if self.song_queue and not self.currently_playing:
-                        next_song = self.song_queue.popleft()
+                        if self.rewound:
+                            self.current_index -= 1
+                        else:
+                            self.current_index += 1
+
+                        next_song = self.song_queue[self.current_index]
+                        self.rewound = False
                         self.currently_playing = next_song
                         should_play = True
                     else:
@@ -323,16 +331,6 @@ class AsyncLocalServer:
                     
                     # Play the song
                     await self._play_song(next_song)
-                    
-                    # Update history WITHOUT lock
-                    if not hasattr(self, '_skip_history') or not self._skip_history:
-                        self.queue_history.append({
-                            'song': next_song,
-                            'played_at': time.time(),
-                            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-                        })
-                    else:
-                        self._skip_history = False
                     
                     # Wait for playback to complete
                     self._current_playback_task = asyncio.current_task()
@@ -379,17 +377,17 @@ class AsyncLocalServer:
 
     async def _play_song(self, song_id):
         """Internal method to play a single song"""
-        logger.info(f"!!! _play_song called for {song_id}, currently_playing: {self.currently_playing}, song_queue size: {len(self.song_queue)}")
-        """Internal method to play a single song"""
         try:
             # Stop current playback if any
             await self.player.stop()
             
             # Stream and play the song
             success = await self.stream_and_play(song_id)
-            
+
+            #FIXME sometimes the now playing doesn't update.
+            #TODO Maybe make the client request the currently playing song and current queue every 5 sec and compare it with what's currently being displayed
+
             if success:
-                # Broadcast just the song ID to all clients
                 await self.broadcast_now_playing(song_id)
             
             return success
@@ -537,9 +535,6 @@ class AsyncLocalServer:
         elif command == "queue":
             return await self.show_queue()
             
-        elif command == "history":
-            return await self.show_history()
-            
         elif command == "clear_queue":
             return await self.clear_queue()
             
@@ -584,28 +579,7 @@ class AsyncLocalServer:
                 return "Queue is empty"
             
             queue_list = list(self.song_queue)
-            result = f"Current queue ({len(queue_list)} songs):\n"
-            for i, song in enumerate(queue_list[:20], 1):  # Show first 20
-                result += f"{i}. {song}\n"
-            
-            if len(queue_list) > 20:
-                result += f"... and {len(queue_list) - 20} more"
-            
-            if self.currently_playing:
-                result += f"\nCurrently playing: {self.currently_playing}"
-            
-            return result
-    
-    async def show_history(self):
-        """Show playback history"""
-        if not self.queue_history:
-            return "No playback history"
-        
-        result = f"Playback history (last {len(self.queue_history)} songs):\n"
-        for i, entry in enumerate(reversed(list(self.queue_history)), 1):
-            result += f"{i}. {entry['song']} (played at {entry['timestamp']})\n"
-        
-        return result
+            return queue_list
     
     async def clear_queue(self):
         """Clear the queue"""
@@ -616,7 +590,6 @@ class AsyncLocalServer:
     
     async def skip(self):
         """Skip current track"""
-        self._skip_history = True
         self.currently_playing = None
         await self.player.stop()
         return "Skipped current track"
@@ -628,27 +601,20 @@ class AsyncLocalServer:
             current_pos = status.get('position', 0)
             
             # If within first 10 seconds, go to previous song
-            if current_pos <= 10 and self.queue_history:
-                # Get the previous song from history
-                previous_song = self.queue_history[-1]['song']
-                logger.info(f"Rewind: within first 10 seconds, playing previous song: {previous_song}")
-                
-                # Signal to skip adding this to history when playback ends
-                self._skip_history = True
-    
+            if current_pos <= 10:
                 # Stop the current playback
                 await self.player.stop()
                 
                 # Wait a moment for the stop to complete
                 await asyncio.sleep(0.1)
+
+                self.rewound = True
                 
                 # Clear currently_playing to allow queue processor to pick up the previous song
                 async with self.queue_lock:
-                    # Instead of playing directly, add previous song to front of queue
-                    self.song_queue.appendleft(previous_song)
                     self.currently_playing = None
-                
-                return f"Rewound to previous song: {previous_song}"
+
+                return "Rewound to previous song"
             else:
                 # Otherwise, rewind within current song
                 new_pos = max(0, current_pos - 10)
