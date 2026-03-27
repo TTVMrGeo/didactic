@@ -42,9 +42,7 @@ NoDisplay=false
 
 ## Todo list:
 ```
-#FIXME Queue single song
 #TODO Add profiles for different local servers (eg, 0.0.0.0 and 10.0.0.103)
-#FIXME Fetch song info when a client connects mid song
 #TODO Add song to back of queue
 #TODO Song progress bar
 #TODO Song volume controlls
