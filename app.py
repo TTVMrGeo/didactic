@@ -7,6 +7,9 @@ def main(page: ft.Page):
     
     page.title = "Music App"
 
+    theme = settings["profiles"][settings["active_profile"]]["theme"]
+    page.theme_mode = ft.ThemeMode.DARK if theme == "dark" else ft.ThemeMode.LIGHT
+
     # --- Login dialog ---
     serverip_field = ft.TextField(label="Server IP", value=settings['server'].get('url', ''))
     username_field = ft.TextField(label="Username", value=settings['server'].get('user', ''))
@@ -168,7 +171,16 @@ def main(page: ft.Page):
         page.update()
 
     def toggle_theme(e):
-        print("Idk bro change the theme ig")
+        pro = settings['active_profile']
+        theme = settings["profiles"][pro]["theme"]
+        match theme:
+            case "dark":
+                page.theme_mode = ft.ThemeMode.LIGHT
+                settings["profiles"][pro]["theme"] = "light"
+            case "light":
+                page.theme_mode = ft.ThemeMode.DARK
+                settings["profiles"][pro]["theme"] = "dark"
+        
 
     def do_rewind(e):
         client.rewind()
