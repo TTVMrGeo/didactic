@@ -1,10 +1,10 @@
 import json, re, flet as ft, asyncio, requests
+from socket import socket, AF_INET, SOCK_STREAM
 from pathlib import Path
 from main import local, settings, settings_dir
 from pysubsonic import pySubsonic
 
 def main(page: ft.Page):
-    
     page.title = "Music App"
 
     theme = settings["profiles"][settings["active_profile"]]["theme"]
@@ -79,8 +79,6 @@ def main(page: ft.Page):
         lfm_password="ILoveCoco@13".encode()
     )
 
-    playlist_list = pysub.getPlaylists()["subsonic-response"]["playlists"]["playlist"]
-
     def cache_image(song_id):
         if not Path("img_cache/{song_id}.png").is_file():
             response = requests.get(pysub.albumCover(song_id), stream=True)
@@ -95,7 +93,7 @@ def main(page: ft.Page):
                 return "assets/NoCover.jpg"
         else:
             return f"img_cache/{song_id}.png"
-    
+        
     # --- Function to fetch song details from Subsonic ---
     def get_song_details(song_id):
         """Fetch song details from Subsonic using pysubsonic"""
@@ -108,7 +106,7 @@ def main(page: ft.Page):
             return song
         except Exception as e:
             print(f"Error fetching song details: {e}")
-    
+
     # --- Function to update the UI when a song starts ---
     def update_now_playing(song_id):
         """Update the UI with the currently playing song"""
@@ -138,6 +136,8 @@ def main(page: ft.Page):
         
         # Update the page
         page.update()
+
+    playlist_list = pysub.getPlaylists()["subsonic-response"]["playlists"]["playlist"]
     
     # --- Set up callback for when a song starts ---
     def on_song_start(song_info):
@@ -371,5 +371,9 @@ def main(page: ft.Page):
         ft.Row([left_sidebar, main_content, right_sidebar], expand=True)
     )
 
+    status = client.post_with_response("Connected To Server")
+    print("-"*20, status)
+    if status != "Connected, nothing playing" and status != "":
+        update_now_playing(status)
 
 ft.run(main)

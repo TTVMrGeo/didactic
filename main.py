@@ -8,7 +8,8 @@ default_settings = {
     'profiles': {
         'pc': {
             'ip': '0.0.0.0',
-            'port': 6969
+            'port': 6969,
+            'theme': 'dark'
         }
     },
     'server': {
@@ -52,20 +53,6 @@ class local:
             return url
         else:
             return "Incorrect username or password" if response["subsonic-response"]["error"]["code"] in (40, 10) else "Login failed"
-
-    def post(self, command):
-        """Send command to server"""
-        if not self.connected:
-            if not self.connect():
-                return "Could not connect to server"
-        
-        try:
-            self.socket.send(command.encode())
-            return "Command sent"
-        except Exception as e:
-            print(f"Send error: {e}")
-            self.connected = False
-            return f"Error: {e}"
 
     def post_with_response(self, command):
         """Send command and wait for response"""
