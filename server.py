@@ -46,8 +46,10 @@ class MPVPlayer:
                 # Fixed: Access event properties correctly
                 reason = event.reason if hasattr(event, 'reason') else 0
                 logger.debug(f"Playback ended, reason: {reason}")
+                print("-"*40)
                 self.is_playing = False
                 self.is_loaded = False
+                self.current_file = None
                 
             @self.player.event_callback('file-loaded')
             def file_loaded_callback(event):
@@ -108,19 +110,6 @@ class MPVPlayer:
             
         except Exception as e:
             logger.error(f"Failed to play: {e}")
-            return False
-    
-    async def pause(self):
-        """Pause playback"""
-        try:
-            await self.ensure_player()
-            await asyncio.to_thread(self.player.command, 'set', 'pause', 'yes')
-            self.is_playing = False
-            logger.debug("Playback paused")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to pause: {e}")
             return False
     
     async def toggle_pause(self):
@@ -209,12 +198,12 @@ class MPVPlayer:
                 except:
                     status['paused'] = not self.is_playing
             
-            # Get volume
-            try:
-                volume = await asyncio.to_thread(self.player.command, 'get', 'volume')
-                status['volume'] = int(volume) if volume else 50
-            except:
-                status['volume'] = 50
+                # Get volume
+                try:
+                    volume = await asyncio.to_thread(self.player.command, 'get', 'volume')
+                    status['volume'] = int(volume) if volume else 50
+                except:
+                    status['volume'] = 50
             
             return status
             
@@ -330,18 +319,15 @@ class AsyncLocalServer:
                     # Play the song
                     await self._play_song(next_song)
                     
-                    # Wait for playback to complete
-                    self._current_playback_task = asyncio.current_task()
-                    try:
-                        while self.currently_playing and not self.skip_current:
-                            if not self.player.is_playing and not self.player.is_loaded:
-                                break
-                            await asyncio.sleep(0.5)
-                    finally:
-                        self._current_playback_task = None
-                        self.skip_current = False
+                    # Wait for playback to complete naturally
+                    while self.currently_playing:
+                        # Check if playback has ended naturally by looking at MPV state
+                        if not self.player.is_playing and not self.is_loaded: #FIXME self.player.is_loaded never updates on playback completion
+                            logger.debug("Playback finished naturally")
+                            break
+                        await asyncio.sleep(0.5)
                     
-                    # Clear currently_playing WITHOUT lock
+                    # Clear currently_playing without lock
                     self.currently_playing = None
                         
                 # Small delay to prevent busy waiting
@@ -382,11 +368,9 @@ class AsyncLocalServer:
             # Stream and play the song
             success = await self.stream_and_play(song_id)
 
-            #FIXME sometimes the now playing doesn't update.
-            #TODO Maybe make the client request the currently playing song and current queue every 5 sec and compare it with what's currently being displayed
-
             if success:
-                await self.broadcast_now_playing(song_id)
+                if self.clients != {}:
+                    await self.broadcast_now_playing(song_id)
             
             return success
         except Exception as e:
@@ -535,9 +519,17 @@ class AsyncLocalServer:
             
         elif command == "clear_queue":
             return await self.clear_queue()
+        
+        elif command == "Connected To Server":
+            return await self.client_connected()
             
         else:
             return f"{command} Unknown command"
+        
+    async def client_connected(self):
+        if self.song_queue == [] or self.currently_playing == None:
+            return "Connected, nothing playing"
+        return f"{self.currently_playing}"
 
     async def shuffle(self, playlist):
         shuffled = playlist.copy()
