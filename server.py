@@ -1,7 +1,6 @@
 #!/usr/bin/python
-import optparse, uuid, hashlib, requests, tempfile, os, asyncio, json, logging, mpv, random, time
+import optparse, uuid, hashlib, requests, tempfile, os, asyncio, json, logging, mpv, random
 from asyncio import StreamReader, StreamWriter
-from collections import deque
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -308,7 +307,6 @@ class AsyncLocalServer:
     async def process_queue(self):
         """Process the queue sequentially"""
         while not self.shutdown_flag:
-            print(self.song_queue)
             try:
                 # Check if we need to play a song
                 async with self.queue_lock:
@@ -559,7 +557,7 @@ class AsyncLocalServer:
             return f"Added {added_count} songs to queue. Queue size: {len(self.song_queue)}"
         else:
             async with self.queue_lock:
-                self.song_queue.appendleft(recieved_item[0])
+                self.song_queue.insert(self.current_index + 1, recieved_item[0])
             return "Added song to queue"
     
     async def play(self, item):
