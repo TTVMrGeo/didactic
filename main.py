@@ -2,23 +2,6 @@ import optparse, json, subprocess, threading, queue, json
 from pathlib import Path
 from socket import socket, AF_INET, SOCK_STREAM
 
-settings_dir = "/home/mrgeo/Documents/Code/Music App/Client"
-default_settings = {
-    'active_profile': 'pc',
-    'profiles': {
-        'pc': {
-            'ip': '0.0.0.0',
-            'port': 6969,
-            'theme': 'dark'
-        }
-    },
-    'server': {
-        'url': '',
-        'user': '',
-        'password': ''
-    }
-}
-
 class local:
     def __init__(self, host, port):
         self.host = host
@@ -83,6 +66,9 @@ class local:
 
     def playSong(self, song):
         return self.post_with_response(f"play {song}")
+    
+    def queueSong(self, song):
+        return self.post_with_response(f"queue {song}")
 
     def toggle_pause(self):
         return self.post_with_response("toggle_pause")
@@ -173,17 +159,3 @@ def get_arguments():
             return options
     else:
         return "Server"
-    
-def dump_default(dSettings):
-    with open(f"{settings_dir}/settings.json", 'w') as json_file:
-        json.dump(dSettings, json_file, indent=4)
-
-if Path(settings_dir).is_dir():
-    if not Path(f"{settings_dir}/settings.json").is_file():
-        dump_default(default_settings)
-else:
-    subprocess.run(["mkdir", "/home/mrgeo/.config/music"])
-    dump_default(default_settings)
-
-with open(f"{settings_dir}/settings.json", 'r') as file:
-    settings = json.load(file)
