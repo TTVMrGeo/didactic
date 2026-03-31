@@ -42,8 +42,8 @@ NoDisplay=false
 
 ## Todo list:
 ```
-#TODO Add profiles for different local servers (eg, 0.0.0.0 and 10.0.0.103)
-#TODO Add song to back of queue
+#TODO Show queue on client
+#TODO Add setting to create new profiles
 #TODO Song progress bar
 #TODO Song volume controlls
 #TODO Play specific song with searching
