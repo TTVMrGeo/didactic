@@ -13,6 +13,7 @@ class MPVPlayer:
         self.is_playing = False
         self.is_loaded = False
         self.playback_task = None
+        self._loop = asyncio.get_event_loop()  # Store the event loop
         self._init_player()
         
     def _init_player(self):
@@ -47,20 +48,45 @@ class MPVPlayer:
                 reason = event.reason if hasattr(event, 'reason') else 0
                 logger.debug(f"Playback ended, reason: {reason}")
                 print("-"*40)
+                
+                # Update flags directly (they're thread-safe for simple booleans)
                 self.is_playing = False
                 self.is_loaded = False
                 self.current_file = None
                 
+                # Schedule a notification to the asyncio loop if needed
+                if self._loop and not self._loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        self._notify_playback_ended(),
+                        self._loop
+                    )
+            
             @self.player.event_callback('file-loaded')
             def file_loaded_callback(event):
                 logger.debug("File loaded successfully")
                 self.is_loaded = True
+                
+                # Schedule a notification to the asyncio loop if needed
+                if self._loop and not self._loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        self._notify_file_loaded(),
+                        self._loop
+                    )
                 
             logger.info("MPV player initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize MPV: {e}")
             raise
+    
+    async def _notify_playback_ended(self):
+        """Notify that playback ended (can be overridden or used for callbacks)"""
+        # This runs in the asyncio event loop
+        logger.debug("Playback ended notification sent to event loop")
+    
+    async def _notify_file_loaded(self):
+        """Notify that file loaded (can be overridden or used for callbacks)"""
+        logger.debug("File loaded notification sent to event loop")
     
     async def ensure_player(self):
         """Ensure player is initialized"""
@@ -81,12 +107,23 @@ class MPVPlayer:
             # Stop current playback first
             await self.stop()
             
+            # Reset flags
+            self.is_loaded = False
+            self.is_playing = False
+            
             # Load new file
             await asyncio.to_thread(self.player.command, 'loadfile', filename)
             self.current_file = filename
             
-            # Wait for file to load
-            await asyncio.sleep(0.5)
+            # Wait for file to load with timeout
+            timeout = 10
+            start_time = asyncio.get_event_loop().time()
+            while not self.is_loaded and (asyncio.get_event_loop().time() - start_time) < timeout:
+                await asyncio.sleep(0.1)
+            
+            if not self.is_loaded:
+                logger.warning(f"File loading timed out after {timeout} seconds")
+                return False
             
             return True
             
@@ -113,16 +150,14 @@ class MPVPlayer:
             return False
     
     async def toggle_pause(self):
-        """Toggle pause state - fixed to not skip songs"""
+        """Toggle pause state"""
         try:
             await self.ensure_player()
             
-            # Only toggle if we have a loaded file
             if self.is_loaded:
                 await asyncio.to_thread(self.player.command, 'cycle', 'pause')
                 return True
             elif self.current_file:
-                # If no file is loaded but we have a current file, start playback
                 await self.play()
                 return True
             else:
@@ -139,6 +174,7 @@ class MPVPlayer:
             await self.ensure_player()
             await asyncio.to_thread(self.player.command, 'stop')
             self.is_playing = False
+            self.is_loaded = False
             logger.debug("Playback stopped")
             return True
             
@@ -163,7 +199,6 @@ class MPVPlayer:
         try:
             await self.ensure_player()
             
-            # Get properties with error handling
             status = {
                 'playing': self.is_playing,
                 'loaded': self.is_loaded,
@@ -181,7 +216,6 @@ class MPVPlayer:
                 except:
                     status['position'] = 0.0
                 
-                # Try to get duration
                 try:
                     duration = await asyncio.to_thread(self.player.command, 'get', 'duration')
                     if duration and duration != 'null':
@@ -191,14 +225,12 @@ class MPVPlayer:
                 except:
                     status['duration'] = 0.0
                 
-                # Try to get pause state
                 try:
                     paused = await asyncio.to_thread(self.player.command, 'get', 'pause')
                     status['paused'] = paused == 'yes'
                 except:
                     status['paused'] = not self.is_playing
             
-                # Get volume
                 try:
                     volume = await asyncio.to_thread(self.player.command, 'get', 'volume')
                     status['volume'] = int(volume) if volume else 50
@@ -227,7 +259,7 @@ class MPVPlayer:
     async def wait_for_playback(self):
         """Wait for playback to complete"""
         while self.is_playing and self.is_loaded:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
     
     def cleanup(self):
         """Clean up MPV resources"""
@@ -304,6 +336,12 @@ class AsyncLocalServer:
                             self.current_index -= 1
                         else:
                             self.current_index += 1
+                        
+                        # Ensure index is within bounds
+                        if self.current_index >= len(self.song_queue):
+                            self.current_index = 0
+                        elif self.current_index < 0:
+                            self.current_index = len(self.song_queue) - 1
 
                         next_song = self.song_queue[self.current_index]
                         self.rewound = False
@@ -319,13 +357,8 @@ class AsyncLocalServer:
                     # Play the song
                     await self._play_song(next_song)
                     
-                    # Wait for playback to complete naturally
-                    while self.currently_playing:
-                        # Check if playback has ended naturally by looking at MPV state
-                        if not self.player.is_playing and not self.is_loaded: #FIXME self.player.is_loaded never updates on playback completion
-                            logger.debug("Playback finished naturally")
-                            break
-                        await asyncio.sleep(0.5)
+                    # Wait for playback to complete using the fixed wait_for_playback
+                    await self.player.wait_for_playback()
                     
                     # Clear currently_playing without lock
                     self.currently_playing = None
@@ -494,6 +527,10 @@ class AsyncLocalServer:
         elif command.startswith("play "):
             item = command[5:]
             return await self.play([item])
+        
+        elif command.startswith("queue "):
+            item = command[6:]
+            return await self.queueSong(item)
             
         elif command == "skip":
             return await self.skip()
@@ -551,6 +588,11 @@ class AsyncLocalServer:
             async with self.queue_lock:
                 self.song_queue.insert(self.current_index + 1, recieved_item[0])
             return "Added song to queue"
+        
+    async def queueSong(self, item):
+        async with self.queue_lock:
+            self.song_queue.append(item)
+        return f"Added {item} to queue"
     
     async def play(self, item):
         """Handle play command - adds to queue or plays immediately"""
