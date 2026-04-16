@@ -142,6 +142,7 @@ class MPVPlayer:
                 
             await asyncio.to_thread(self.player.command, 'set', 'pause', 'no')
             self.is_playing = True
+            self.is_paused = False
             logger.debug("Playback started")
             return True
             
@@ -294,6 +295,7 @@ class AsyncLocalServer:
         self.queue_task = None
         self.skip_current = False
         self.rewound = False
+        self.is_paused = False
 
         # Handle clients
         self.clients = {}
@@ -349,7 +351,7 @@ class AsyncLocalServer:
                     should_play = False
                 
                 # Play the song WITHOUT holding the lock
-                if should_play: #TODO add self.paused
+                if should_play and not self.is_paused:
                     logger.info(f"Processing next song in queue: {next_song}")
                     
                     # Play the song
@@ -615,35 +617,28 @@ class AsyncLocalServer:
     
     async def skip(self):
         """Skip current track"""
+        self.is_paused = False
         self.currently_playing = None
         await self.player.stop()
         return "Skipped current track"
 
     async def rewind(self):
+        self.is_paused = False
         """Rewind current track - goes to previous song if within first 10 seconds"""
         try:
-            status = await self.player.get_status()
-            current_pos = status.get('position', 0)
+            # Stop the current playback
+            await self.player.stop()
             
-            # If within first 10 seconds, go to previous song
-            if current_pos <= 10:
-                # Stop the current playback
-                await self.player.stop()
-                
-                # Wait a moment for the stop to complete
-                await asyncio.sleep(0.1)
+            # Wait a moment for the stop to complete
+            await asyncio.sleep(0.1)
 
-                self.rewound = True
-                
-                # Clear currently_playing to allow queue processor to pick up the previous song
+            self.rewound = True
+            
+            # Clear currently_playing to allow queue processor to pick up the previous song
+            async with self.queue_lock:
                 self.currently_playing = None
 
-                return "Rewound to previous song"
-            else:
-                # Otherwise, rewind within current song
-                new_pos = max(0, current_pos - 10)
-                await self.player.seek(new_pos)
-                return f"Rewound to {new_pos:.1f} seconds"
+            return "Rewound to previous song"
                 
         except Exception as e:
             logger.error(f"Rewind error: {e}", exc_info=True)
@@ -673,8 +668,10 @@ class AsyncLocalServer:
                 # Check if we have a file loaded before checking paused state
                 if status.get('loaded', False):
                     if status.get('paused', False):
+                        self.is_paused = True
                         return "Playback paused"
                     else:
+                        self.is_paused = False
                         return "Playback resumed"
                 else:
                     # This happens when we just started playing a new song
