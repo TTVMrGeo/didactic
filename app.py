@@ -234,7 +234,7 @@ def initialize_app(page: ft.Page, settings):
     output = ft.Text(value="Welcome to Music App", size=16)
     
     def update_settings():
-        page.close_dialog()
+        page.pop_dialog()
         page.update()
     
     def toggle_theme(e):
@@ -263,6 +263,7 @@ def initialize_app(page: ft.Page, settings):
         page.update()
     
     def open_settings(e):
+        getQueue()
         page.show_dialog(settings_dialogue)
     
     def home(e):
@@ -410,7 +411,7 @@ def initialize_app(page: ft.Page, settings):
             tight=True,
         ),
         actions=[
-            ft.FilledButton(content="Cancel", on_click=lambda e: page.close_dialog()),
+            ft.FilledButton(content="Cancel", on_click=lambda e: page.pop_dialog()),
             ft.FilledButton(content="Save", on_click=update_settings),
         ],
         actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -444,7 +445,7 @@ def initialize_app(page: ft.Page, settings):
     )
     
     right_sidebar = ft.Container(
-        content=ft.Column([
+        content=ft.Column(controls=[
             ft.Image(src="assets/NoCover.jpg", width=250, height=250),
             ft.Text(value="Nothing Playing", size=30),
             ft.Text(value="No artist ofc", size=15),
@@ -452,6 +453,11 @@ def initialize_app(page: ft.Page, settings):
         width=250,
         padding=0,
     )
+
+    def getQueue():
+        print(client.getQueue())
+
+    # right_sidebar.content.controls.append(queue)
     
     page.bottom_appbar = ft.BottomAppBar(content=controls_row, height=60, padding=0)
     main_content = ft.Container(

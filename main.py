@@ -1,6 +1,7 @@
 import optparse, json, subprocess, threading, queue, json
 from pathlib import Path
-from socket import socket, AF_INET, SOCK_STREAM
+import socket  # Import the entire socket module
+from socket import socket as socket_class
 
 class local:
     def __init__(self, host, port):
@@ -48,21 +49,53 @@ class local:
             self.socket.settimeout(10.0)
             response = self.socket.recv(1024).decode()
             return response
-        except TimeoutError:  # Changed from socket.timeout
+        except (socket.timeout, TimeoutError):  # Changed from socket.timeout
             return "Timeout waiting for response"
         except Exception as e:
             print(f"Send error: {e}")
             self.connected = False
             return f"Error: {e}"
         
-    def getPlaylists(self):
-        pass
+    
+    def post_playlist(self, playlist, shuffle):
+        """Send command and wait for response"""
+        if not self.connected:
+            if not self.connect():
+                return "Could not connect to server"
+        
+        try:
+            # Convert playlist to JSON string and encode to bytes
+            playlist_data = json.dumps(playlist)
+
+            self.socket.send((("shuffle=" if shuffle else "playlist=") + playlist_data).encode())
+
+            self.socket.settimeout(10.0)
+            
+            # Keep reading until no more data
+            response_data = b''
+            while True:
+                try:
+                    chunk = self.socket.recv(4096)
+                    if not chunk:  # Connection closed by server
+                        break
+                    response_data += chunk
+                except (socket.timeout, TimeoutError):
+                    # Timeout means no more data coming
+                    break
+            
+            return response_data.decode()
+        except (socket.timeout, TimeoutError):
+            return "Timeout waiting for response"
+        except Exception as e:
+            print(f"Send error: {e}")
+            self.connected = False
+            return f"Error: {e}"
 
     def shufflePlaylist(self, playlist):
-        return self.post_with_response(f"shuffle {playlist}")
+        return self.post_playlist(playlist, True)
 
     def playPlaylist(self, playlist):
-        return self.post_with_response(f"playlist {playlist}")
+        return self.post_playlist(playlist, False)
 
     def playSong(self, song):
         return self.post_with_response(f"play {song}")
@@ -86,6 +119,9 @@ class local:
             return json.loads(response).get('current_song', {})
         except:
             return {}
+    
+    def getQueue(self):
+        return list(self.post_with_response("Gimmie da queue"))
 
     def scrobble(self):
         # Change position in current song
@@ -94,7 +130,7 @@ class local:
     def connect(self):
         """Connect to the server and start receiving thread"""
         try:
-            self.socket = socket(AF_INET, SOCK_STREAM)
+            self.socket = socket_class(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.host, self.port))
             self.connected = True
             self.running = True
