@@ -290,9 +290,8 @@ class AsyncLocalServer:
         # Queue management
         self.song_queue = []
         self.currently_playing = None
-        self.current_index = 0
+        self.current_index = -1
         self.queue_task = None
-        self.queue_lock = asyncio.Lock()
         self.skip_current = False
         self.rewound = False
 
@@ -330,28 +329,27 @@ class AsyncLocalServer:
         while not self.shutdown_flag:
             try:
                 # Check if we need to play a song
-                async with self.queue_lock:
-                    if self.song_queue and not self.currently_playing:
-                        if self.rewound:
-                            self.current_index -= 1
-                        else:
-                            self.current_index += 1
-                        
-                        # Ensure index is within bounds
-                        if self.current_index >= len(self.song_queue):
-                            self.current_index = 0
-                        elif self.current_index < 0:
-                            self.current_index = len(self.song_queue) - 1
-
-                        next_song = self.song_queue[self.current_index]
-                        self.rewound = False
-                        self.currently_playing = next_song
-                        should_play = True
+                if self.song_queue and not self.currently_playing:
+                    if self.rewound:
+                        self.current_index -= 1
                     else:
-                        should_play = False
+                        self.current_index += 1
+                    
+                    # Ensure index is within bounds
+                    if self.current_index >= len(self.song_queue):
+                        self.current_index = 0
+                    elif self.current_index < 0:
+                        self.current_index = len(self.song_queue) - 1
+
+                    next_song = self.song_queue[self.current_index]
+                    self.rewound = False
+                    self.currently_playing = next_song
+                    should_play = True
+                else:
+                    should_play = False
                 
                 # Play the song WITHOUT holding the lock
-                if should_play:
+                if should_play: #TODO add self.paused
                     logger.info(f"Processing next song in queue: {next_song}")
                     
                     # Play the song
@@ -478,7 +476,7 @@ class AsyncLocalServer:
         try:
             while not self.shutdown_flag:
                 try:
-                    data = await asyncio.wait_for(reader.read(1024), timeout=60.0)
+                    data = await asyncio.wait_for(reader.read(65536), timeout=60.0)
                     
                     if not data:
                         break
@@ -513,15 +511,13 @@ class AsyncLocalServer:
     async def process_command(self, command: str) -> str:
         """Process incoming commands asynchronously"""
         command = command.strip()
-        
-        if command.startswith("shuffle "):
-            playlist = command[8:]
-            playlist = playlist.replace("'", "").replace("[", "").replace("]", "").replace(",", "").split(" ")
+
+        if command.startswith('shuffle='):
+            playlist = command.replace("'", "").replace("[", "").replace("]", "").replace(",", "").replace('"', "").replace("shuffle=", "").split(" ")
             return await self.shuffle(playlist)
 
-        elif command.startswith("playlist "):
-            playlist = command[9:]
-            playlist = playlist.replace("'", "").replace("[", "").replace("]", "").replace(",", "").split(" ")
+        elif command.startswith("playlist="):
+            playlist = command.replace("'", "").replace("[", "").replace("]", "").replace(",", "").replace('"', "").replace("playlist=", "").split(" ")
             return await self.queue(playlist)
             
         elif command.startswith("play "):
@@ -551,7 +547,7 @@ class AsyncLocalServer:
         elif command == "status":
             return await self.get_status()
             
-        elif command == "queue":
+        elif command == "Gimmie da queue":
             return await self.show_queue()
             
         elif command == "clear_queue":
@@ -578,20 +574,17 @@ class AsyncLocalServer:
         if len(recieved_item) > 1:
             await self.player.stop()
             await self.clear_queue()
-            async with self.queue_lock:
-                added_count = 0
-                for item in recieved_item:
-                    self.song_queue.append(item)
-                    added_count += 1
+            added_count = 0
+            for item in recieved_item:
+                self.song_queue.append(item)
+                added_count += 1
             return f"Added {added_count} songs to queue. Queue size: {len(self.song_queue)}"
         else:
-            async with self.queue_lock:
-                self.song_queue.insert(self.current_index + 1, recieved_item[0])
+            self.song_queue.insert(self.current_index + 1, recieved_item[0])
             return "Added song to queue"
         
     async def queueSong(self, item):
-        async with self.queue_lock:
-            self.song_queue.append(item)
+        self.song_queue.append(item)
         return f"Added {item} to queue"
     
     async def play(self, item):
@@ -605,19 +598,19 @@ class AsyncLocalServer:
             return f"Playing: {item}"
 
     async def show_queue(self):
-        """Show current queue"""
-        async with self.queue_lock:
-            if not self.song_queue:
-                return "Queue is empty"
+        if not self.song_queue:
+            return "Queue is empty"
             
-            queue_list = list(self.song_queue)
-            return queue_list
+        queue = []
+        for item in self.song_queue:
+            print(await self.get_song_details(item))
+        # return queue
     
     async def clear_queue(self):
-        """Clear the queue"""
-        async with self.queue_lock:
-            cleared_count = len(self.song_queue)
-            self.song_queue.clear()
+        cleared_count = len(self.song_queue)
+        self.song_queue.clear()
+        self.currently_playing = None
+        self.current_index = -1
         return f"Cleared {cleared_count} songs from queue"
     
     async def skip(self):
@@ -643,8 +636,7 @@ class AsyncLocalServer:
                 self.rewound = True
                 
                 # Clear currently_playing to allow queue processor to pick up the previous song
-                async with self.queue_lock:
-                    self.currently_playing = None
+                self.currently_playing = None
 
                 return "Rewound to previous song"
             else:
@@ -667,10 +659,9 @@ class AsyncLocalServer:
         status = await self.player.get_status()
         
         # Add queue information to status
-        async with self.queue_lock:
-            status['queue_size'] = len(self.song_queue)
-            status['currently_playing'] = self.currently_playing
-        
+        status['queue_size'] = len(self.song_queue)
+        status['currently_playing'] = self.currently_playing
+    
         return json.dumps(status, indent=2)
 
     async def toggle_pause(self):
