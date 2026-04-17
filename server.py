@@ -601,12 +601,13 @@ class AsyncLocalServer:
 
     async def show_queue(self):
         if not self.song_queue:
-            return "Queue is empty"
-            
-        queue = []
-        for item in self.song_queue:
-            print(await self.get_song_details(item))
-        # return queue
+            return json.dumps([])
+        
+        if self.current_index > 1:
+            return json.dumps(self.song_queue[self.current_index-1:][:20])
+        else:
+            print(self.current_index)
+            return json.dumps(self.song_queue[self.current_index:][:20])
     
     async def clear_queue(self):
         cleared_count = len(self.song_queue)
