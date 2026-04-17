@@ -190,7 +190,9 @@ def initialize_app(page: ft.Page, settings):
     
     def update_now_playing(song_id):
         print(f"Now playing song ID: {song_id}")
+
         song_details = get_song_details(song_id)
+        song_queue = ft.Container(content=ft.Column(controls=[]))
         
         if song_details:
             right_sidebar.content = ft.Container(
@@ -203,12 +205,31 @@ def initialize_app(page: ft.Page, settings):
                     ),
                     ft.Text(value=song_details.get("title", "Unknown"), size=30, weight=ft.FontWeight.BOLD),
                     ft.Text(value=song_details.get("artist", "Unknown"), size=15),
+                    ft.Text(value="Queue:", size=20, weight=ft.FontWeight.BOLD),
+                    song_queue
                 ]),
                 width=250,
                 padding=10,
             )
             output.value = f"Now playing: {song_details.get('title', 'Unknown')}"
-            page.update()
+
+        queue = client.getQueue()
+        #FIXME Times out sometimes?
+        for item in queue:
+            if item == song_id:
+                song_queue.content.controls.append(
+                    ft.Row(controls=[
+                        ft.Icon(icon=ft.Icons.AIRPLANEMODE_ACTIVE),
+                        ft.Text(value=pysub.getSong(item)["title"])
+                    ])
+                )
+            else:
+                song_queue.content.controls.append(
+                    ft.Row(controls=[
+                        ft.Text(value=pysub.getSong(item)["title"])
+                    ])
+                )
+        page.update()
     
     try:
         playlist_list = pysub.getPlaylists()["subsonic-response"]["playlists"]["playlist"]
@@ -263,7 +284,6 @@ def initialize_app(page: ft.Page, settings):
         page.update()
     
     def open_settings(e):
-        getQueue()
         page.show_dialog(settings_dialogue)
     
     def home(e):
@@ -453,11 +473,6 @@ def initialize_app(page: ft.Page, settings):
         width=250,
         padding=0,
     )
-
-    def getQueue():
-        print(client.getQueue())
-
-    # right_sidebar.content.controls.append(queue)
     
     page.bottom_appbar = ft.BottomAppBar(content=controls_row, height=60, padding=0)
     main_content = ft.Container(

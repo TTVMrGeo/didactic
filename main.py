@@ -121,7 +121,60 @@ class local:
             return {}
     
     def getQueue(self):
-        return list(self.post_with_response("Gimmie da queue"))
+        """Request and receive the queue list from the server (JSON version)"""
+        if not self.connected:
+            if not self.connect():
+                return "Could not connect to server"
+        
+        try:
+            self.socket.send("Gimmie da queue".encode())
+            self.socket.settimeout(10.0)
+            
+            # First, receive the message length if your protocol uses it
+            # Or use a delimiter like newline if the server sends one
+            response_data = b''
+            while True:
+                try:
+                    chunk = self.socket.recv(4096)
+                    if not chunk:
+                        break
+                    response_data += chunk
+                    
+                    # Try to parse incrementally to detect complete JSON
+                    try:
+                        # Attempt to parse what we have so far
+                        json.loads(response_data.decode())
+                        # If successful, we have complete JSON
+                        break
+                    except json.JSONDecodeError:
+                        # Incomplete JSON, continue receiving
+                        continue
+                        
+                except (socket.timeout, TimeoutError):
+                    break
+            
+            response_str = response_data.decode()
+            
+            # Parse JSON response
+            if response_str:
+                try:
+                    parsed = json.loads(response_str)
+                    if isinstance(parsed, list):
+                        return parsed
+                    else:
+                        return [parsed]
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error: {e}")
+                    print(f"Raw response: {response_str[:200]}")  # Debug output
+                    # Fallback for non-JSON responses
+                    return [response_str] if response_str else []
+            return []
+                
+        except (socket.timeout, TimeoutError):
+            return "Timeout waiting for response"
+        except Exception as e:
+            print(f"Receive error: {e}")
+            return f"Error: {e}"
 
     def scrobble(self):
         # Change position in current song
