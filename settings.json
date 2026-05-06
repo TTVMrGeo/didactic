@@ -1,0 +1,9 @@
+{
+    "theme": "dark",
+    "server": {
+        "url": "http://server:4533",
+        "user": "MrGeo",
+        "password": "ILoveCoco@13",
+        "remember_me": true
+    }
+}
